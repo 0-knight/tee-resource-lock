@@ -1,0 +1,71 @@
+{
+  "name": "tee-resource-lock",
+  "version": "1.0.0",
+  "description": "TEE-based Resource Lock System - A Credible Commitment Machine implementation for cross-chain transactions",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "src",
+    "contracts"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "build:watch": "tsc --watch",
+    "start:server": "ts-node src/api/server.ts",
+    "start:examples": "ts-node src/client/examples.ts",
+    "dev": "ts-node-dev --respawn src/api/server.ts",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "lint": "eslint src --ext .ts",
+    "lint:fix": "eslint src --ext .ts --fix",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run build",
+    "docker:build": "docker build -t tee-resource-lock:latest -f Dockerfile.enclave .",
+    "enclave:build": "nitro-cli build-enclave --docker-uri tee-resource-lock:latest --output-file tee-resource-lock.eif"
+  },
+  "keywords": [
+    "tee",
+    "trusted-execution-environment",
+    "resource-lock",
+    "blockchain",
+    "cross-chain",
+    "commitment",
+    "evm",
+    "aws-nitro-enclave",
+    "erc-4337",
+    "smart-account"
+  ],
+  "author": "",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/YOUR_USERNAME/tee-resource-lock.git"
+  },
+  "bugs": {
+    "url": "https://github.com/YOUR_USERNAME/tee-resource-lock/issues"
+  },
+  "homepage": "https://github.com/YOUR_USERNAME/tee-resource-lock#readme",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@noble/curves": "^1.4.0",
+    "@noble/hashes": "^1.4.0"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.12",
+    "@types/node": "^20.11.0",
+    "@typescript-eslint/eslint-plugin": "^6.21.0",
+    "@typescript-eslint/parser": "^6.21.0",
+    "eslint": "^8.56.0",
+    "eslint-config-prettier": "^9.1.0",
+    "jest": "^29.7.0",
+    "prettier": "^3.2.5",
+    "ts-jest": "^29.1.2",
+    "ts-node": "^10.9.2",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.3.3"
+  }
+}

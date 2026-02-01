@@ -1,0 +1,420 @@
+/**
+ * TEE Resource Lock API Server
+ * 
+ * HTTP server running inside the enclave that exposes CCM functionality.
+ * Uses vsock for secure communication in AWS Nitro Enclaves.
+ * 
+ * In production, this would use vsock (VM sockets) for parent-enclave communication.
+ * For development/testing, we use standard HTTP.
+ */
+
+import { createServer, IncomingMessage, ServerResponse } from 'http';
+import {
+  Address,
+  Hash,
+  Signature,
+  CreateLockRequest,
+  CreateLockResponse,
+  SignLockRequest,
+  SignLockResponse,
+  FulfillLockRequest,
+  FulfillLockResponse,
+  BootAttestation,
+  AppAttestation,
+  BalanceResponse,
+  ResourceLock,
+  AssetIdentifier,
+} from '../shared/types';
+
+import {
+  CredibleCommitmentMachine,
+  initializeCCM,
+  getCCM,
+} from '../enclave/ccm';
+
+// ============================================================================
+// API Types
+// ============================================================================
+
+interface APIRequest<T = any> {
+  jsonrpc: '2.0';
+  id: string | number;
+  method: string;
+  params: T;
+}
+
+interface APIResponse<T = any> {
+  jsonrpc: '2.0';
+  id: string | number;
+  result?: T;
+  error?: {
+    code: number;
+    message: string;
+    data?: any;
+  };
+}
+
+interface APIError {
+  code: number;
+  message: string;
+  data?: any;
+}
+
+// Error codes
+const ERROR_CODES = {
+  PARSE_ERROR: -32700,
+  INVALID_REQUEST: -32600,
+  METHOD_NOT_FOUND: -32601,
+  INVALID_PARAMS: -32602,
+  INTERNAL_ERROR: -32603,
+  // Custom errors
+  LOCK_NOT_FOUND: -32001,
+  INVALID_SIGNATURE: -32002,
+  LOCK_EXPIRED: -32003,
+  VALIDATION_ERROR: -32004,
+  UNAUTHORIZED: -32005,
+};
+
+// ============================================================================
+// Request Handlers
+// ============================================================================
+
+type RequestHandler = (params: any) => Promise<any>;
+
+const handlers: Map<string, RequestHandler> = new Map();
+
+// Health check
+handlers.set('health', async () => {
+  const ccm = getCCM();
+  return {
+    status: 'healthy',
+    enclaveId: ccm.getEnclaveId(),
+    publicKey: ccm.getEnclavePublicKey(),
+    stateRoot: ccm.getStateRoot(),
+    timestamp: Math.floor(Date.now() / 1000),
+  };
+});
+
+// Get boot attestation
+handlers.set('getBootAttestation', async () => {
+  const ccm = getCCM();
+  return ccm.generateBootAttestation();
+});
+
+// Create a new lock
+handlers.set('createLock', async (params: CreateLockRequest): Promise<CreateLockResponse> => {
+  validateRequired(params, ['owner', 'asset', 'amount', 'expiresIn', 'fulfillmentCondition']);
+  validateAddress(params.owner, 'owner');
+  validateAsset(params.asset);
+  validateFulfillmentCondition(params.fulfillmentCondition);
+  
+  const ccm = getCCM();
+  return ccm.createLock(params);
+});
+
+// Sign a lock (user submits signature, CCM co-signs)
+handlers.set('signLock', async (params: SignLockRequest): Promise<SignLockResponse> => {
+  validateRequired(params, ['lockId', 'signature']);
+  validateHash(params.lockId, 'lockId');
+  validateSignature(params.signature);
+  
+  const ccm = getCCM();
+  return ccm.signLock(params);
+});
+
+// Verify fulfillment and get settlement UserOp
+handlers.set('verifyFulfillment', async (params: FulfillLockRequest): Promise<FulfillLockResponse> => {
+  validateRequired(params, ['lockId', 'fulfillmentProof']);
+  validateHash(params.lockId, 'lockId');
+  validateFulfillmentProof(params.fulfillmentProof);
+  
+  const ccm = getCCM();
+  return ccm.verifyFulfillment(params);
+});
+
+// Cancel a lock
+handlers.set('cancelLock', async (params: { lockId: Hash; signature: Signature }): Promise<AppAttestation> => {
+  validateRequired(params, ['lockId', 'signature']);
+  validateHash(params.lockId, 'lockId');
+  validateSignature(params.signature);
+  
+  const ccm = getCCM();
+  return ccm.cancelLock(params.lockId, params.signature);
+});
+
+// Get lock by ID
+handlers.set('getLock', async (params: { lockId: Hash }): Promise<ResourceLock | null> => {
+  validateRequired(params, ['lockId']);
+  validateHash(params.lockId, 'lockId');
+  
+  const ccm = getCCM();
+  const lock = ccm.getLock(params.lockId);
+  return lock || null;
+});
+
+// Get active locks for owner
+handlers.set('getActiveLocks', async (params: { owner: Address }): Promise<ResourceLock[]> => {
+  validateRequired(params, ['owner']);
+  validateAddress(params.owner, 'owner');
+  
+  const ccm = getCCM();
+  return ccm.getActiveLocks(params.owner);
+});
+
+// Get locked balance
+handlers.set('getLockedBalance', async (params: { owner: Address; asset: AssetIdentifier }): Promise<BalanceResponse> => {
+  validateRequired(params, ['owner', 'asset']);
+  validateAddress(params.owner, 'owner');
+  validateAsset(params.asset);
+  
+  const ccm = getCCM();
+  const locks = ccm.getActiveLocks(params.owner);
+  const lockedAmount = ccm.getLockedBalance(params.owner, params.asset);
+  
+  return {
+    total: '0', // Would need RPC to get on-chain balance
+    available: '0', // total - locked
+    locked: lockedAmount.toString(),
+    locks: locks,
+  };
+});
+
+// Get state root
+handlers.set('getStateRoot', async (): Promise<Hash> => {
+  const ccm = getCCM();
+  return ccm.getStateRoot();
+});
+
+// Cleanup expired locks
+handlers.set('cleanupExpiredLocks', async (): Promise<{ cleaned: number }> => {
+  const ccm = getCCM();
+  const cleaned = ccm.cleanupExpiredLocks();
+  return { cleaned };
+});
+
+// ============================================================================
+// Validation Helpers
+// ============================================================================
+
+function validateRequired(obj: any, fields: string[]): void {
+  for (const field of fields) {
+    if (obj[field] === undefined || obj[field] === null) {
+      throw createError(ERROR_CODES.INVALID_PARAMS, `Missing required field: ${field}`);
+    }
+  }
+}
+
+function validateAddress(address: any, fieldName: string): void {
+  if (typeof address !== 'string' || !address.match(/^0x[a-fA-F0-9]{40}$/)) {
+    throw createError(ERROR_CODES.INVALID_PARAMS, `Invalid address for ${fieldName}`);
+  }
+}
+
+function validateHash(hash: any, fieldName: string): void {
+  if (typeof hash !== 'string' || !hash.match(/^0x[a-fA-F0-9]{64}$/)) {
+    throw createError(ERROR_CODES.INVALID_PARAMS, `Invalid hash for ${fieldName}`);
+  }
+}
+
+function validateSignature(sig: any): void {
+  if (typeof sig !== 'string' || !sig.match(/^0x[a-fA-F0-9]{130}$/)) {
+    throw createError(ERROR_CODES.INVALID_PARAMS, 'Invalid signature format');
+  }
+}
+
+function validateAsset(asset: any): void {
+  if (!asset || typeof asset !== 'object') {
+    throw createError(ERROR_CODES.INVALID_PARAMS, 'Invalid asset');
+  }
+  if (typeof asset.chainId !== 'number') {
+    throw createError(ERROR_CODES.INVALID_PARAMS, 'Invalid asset.chainId');
+  }
+  if (!['native', 'erc20', 'erc721', 'erc1155'].includes(asset.assetType)) {
+    throw createError(ERROR_CODES.INVALID_PARAMS, 'Invalid asset.assetType');
+  }
+}
+
+function validateFulfillmentCondition(condition: any): void {
+  if (!condition || typeof condition !== 'object') {
+    throw createError(ERROR_CODES.INVALID_PARAMS, 'Invalid fulfillmentCondition');
+  }
+  if (typeof condition.targetChainId !== 'number') {
+    throw createError(ERROR_CODES.INVALID_PARAMS, 'Invalid fulfillmentCondition.targetChainId');
+  }
+  validateAsset(condition.targetAsset);
+  validateAddress(condition.recipient, 'fulfillmentCondition.recipient');
+}
+
+function validateFulfillmentProof(proof: any): void {
+  if (!proof || typeof proof !== 'object') {
+    throw createError(ERROR_CODES.INVALID_PARAMS, 'Invalid fulfillmentProof');
+  }
+  validateHash(proof.transactionHash, 'fulfillmentProof.transactionHash');
+  validateHash(proof.blockHash, 'fulfillmentProof.blockHash');
+  if (typeof proof.blockNumber !== 'number') {
+    throw createError(ERROR_CODES.INVALID_PARAMS, 'Invalid fulfillmentProof.blockNumber');
+  }
+}
+
+function createError(code: number, message: string, data?: any): APIError {
+  return { code, message, data };
+}
+
+// ============================================================================
+// Request Processing
+// ============================================================================
+
+async function processRequest(request: APIRequest): Promise<APIResponse> {
+  const { id, method, params } = request;
+  
+  try {
+    const handler = handlers.get(method);
+    if (!handler) {
+      return {
+        jsonrpc: '2.0',
+        id,
+        error: createError(ERROR_CODES.METHOD_NOT_FOUND, `Method not found: ${method}`),
+      };
+    }
+    
+    const result = await handler(params || {});
+    
+    return {
+      jsonrpc: '2.0',
+      id,
+      result,
+    };
+  } catch (error: any) {
+    // Check if it's an API error
+    if (error.code && error.message) {
+      return {
+        jsonrpc: '2.0',
+        id,
+        error: error as APIError,
+      };
+    }
+    
+    // Unknown error
+    console.error(`[API] Error processing ${method}:`, error);
+    return {
+      jsonrpc: '2.0',
+      id,
+      error: createError(ERROR_CODES.INTERNAL_ERROR, error.message || 'Internal error'),
+    };
+  }
+}
+
+// ============================================================================
+// HTTP Server
+// ============================================================================
+
+async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  // CORS headers
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  
+  // Handle preflight
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+  
+  // Only accept POST
+  if (req.method !== 'POST') {
+    res.writeHead(405, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      jsonrpc: '2.0',
+      id: null,
+      error: createError(ERROR_CODES.INVALID_REQUEST, 'Only POST method is accepted'),
+    }));
+    return;
+  }
+  
+  // Parse body
+  let body = '';
+  for await (const chunk of req) {
+    body += chunk;
+  }
+  
+  let request: APIRequest;
+  try {
+    request = JSON.parse(body);
+  } catch {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      jsonrpc: '2.0',
+      id: null,
+      error: createError(ERROR_CODES.PARSE_ERROR, 'Invalid JSON'),
+    }));
+    return;
+  }
+  
+  // Validate JSON-RPC request
+  if (request.jsonrpc !== '2.0' || !request.method) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      jsonrpc: '2.0',
+      id: request.id || null,
+      error: createError(ERROR_CODES.INVALID_REQUEST, 'Invalid JSON-RPC request'),
+    }));
+    return;
+  }
+  
+  // Process request
+  const response = await processRequest(request);
+  
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(response, (_, value) =>
+    typeof value === 'bigint' ? value.toString() : value
+  ));
+}
+
+// ============================================================================
+// Server Startup
+// ============================================================================
+
+const PORT = parseInt(process.env.PORT || '8080', 10);
+const HOST = process.env.HOST || '127.0.0.1';
+
+export function startServer(): void {
+  // Initialize CCM
+  console.log('[API] Initializing Credible Commitment Machine...');
+  initializeCCM();
+  
+  // Create HTTP server
+  const server = createServer(handleRequest);
+  
+  server.listen(PORT, HOST, () => {
+    console.log(`[API] TEE Resource Lock API server running on ${HOST}:${PORT}`);
+    console.log('[API] Available methods:');
+    for (const method of handlers.keys()) {
+      console.log(`  - ${method}`);
+    }
+  });
+  
+  // Graceful shutdown
+  process.on('SIGTERM', () => {
+    console.log('[API] Shutting down...');
+    server.close(() => {
+      console.log('[API] Server closed');
+      process.exit(0);
+    });
+  });
+  
+  // Periodic cleanup
+  setInterval(() => {
+    try {
+      const ccm = getCCM();
+      ccm.cleanupExpiredLocks();
+    } catch (error) {
+      console.error('[API] Cleanup error:', error);
+    }
+  }, 60000); // Every minute
+}
+
+// Start if run directly
+if (require.main === module) {
+  startServer();
+}

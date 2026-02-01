@@ -1,0 +1,70 @@
+# =============================================================================
+# TEE Resource Lock - Nitro Enclave Dockerfile
+# =============================================================================
+# 
+# This Dockerfile creates the image that will run inside AWS Nitro Enclave.
+# Build with: docker build -t tee-resource-lock:latest -f Dockerfile.enclave .
+# Convert to EIF: nitro-cli build-enclave --docker-uri tee-resource-lock:latest --output-file tee-resource-lock.eif
+#
+# =============================================================================
+
+# Stage 1: Build
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+# Install build dependencies
+RUN apk add --no-cache python3 make g++
+
+# Copy package files
+COPY package*.json ./
+COPY tsconfig.json ./
+
+# Install all dependencies (including dev)
+RUN npm ci
+
+# Copy source code
+COPY src/ ./src/
+
+# Build TypeScript
+RUN npm run build
+
+# Stage 2: Production
+FROM node:20-alpine AS production
+
+WORKDIR /app
+
+# Create non-root user for security
+RUN addgroup -g 1001 -S enclave && \
+    adduser -S -D -H -u 1001 -s /sbin/nologin -G enclave enclave
+
+# Copy package files
+COPY package*.json ./
+
+# Install production dependencies only
+RUN npm ci --only=production && \
+    npm cache clean --force
+
+# Copy built files from builder stage
+COPY --from=builder /app/dist ./dist
+
+# Set ownership
+RUN chown -R enclave:enclave /app
+
+# Switch to non-root user
+USER enclave
+
+# Environment variables
+ENV NODE_ENV=production
+ENV HOST=0.0.0.0
+ENV PORT=5000
+
+# Expose vsock port (will be mapped via vsock-proxy)
+EXPOSE 5000
+
+# Health check (optional, for debugging)
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD node -e "require('http').get('http://localhost:5000', (r) => process.exit(r.statusCode === 200 ? 0 : 1))" || exit 1
+
+# Start the API server
+CMD ["node", "dist/api/server.js"]
