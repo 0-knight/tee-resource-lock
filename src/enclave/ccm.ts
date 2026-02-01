@@ -165,14 +165,14 @@ export class CredibleCommitmentMachine {
   // ============================================================================
 
   private getNextNonce(owner: Address): bigint {
-    const current = this.state.nonces.get(owner.toLowerCase()) || 0n;
+    const current = this.state.nonces.get(owner.toLowerCase() as Address) || 0n;
     const next = current + 1n;
-    this.state.nonces.set(owner.toLowerCase(), next);
+    this.state.nonces.set(owner.toLowerCase() as Address, next);
     return next;
   }
 
   private getCurrentNonce(owner: Address): bigint {
-    return this.state.nonces.get(owner.toLowerCase()) || 0n;
+    return this.state.nonces.get(owner.toLowerCase() as Address) || 0n;
   }
 
   // ============================================================================

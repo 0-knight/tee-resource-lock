@@ -148,7 +148,8 @@ export class ResourceLockClient {
           throw new Error(`HTTP error: ${response.status}`);
         }
 
-        const data: RPCResponse<T> = await response.json();
+        //const data: RPCResponse<T> = await response.json();
+        const data = await response.json() as RPCResponse<T>;
 
         if (data.error) {
           throw new ResourceLockError(
