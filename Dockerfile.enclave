@@ -36,13 +36,15 @@ WORKDIR /app
 
 # Create non-root user for security
 RUN addgroup -g 1001 -S enclave && \
-    adduser -S -D -H -u 1001 -s /sbin/nologin -G enclave enclave
+    adduser -S -D -H -u 1001 -s /sbin/nologin -G enclave enclave 
 
 # Copy package files
 COPY package*.json ./
 
 # Install production dependencies only
-RUN npm ci --only=production && \
+#RUN npm ci --only=production && \
+RUN apk add --no-cache socat && \
+    npm ci --only=production && \
     npm cache clean --force
 
 # Copy built files from builder stage
@@ -56,7 +58,7 @@ USER enclave
 
 # Environment variables
 ENV NODE_ENV=production
-ENV HOST=0.0.0.0
+ENV HOST=127.0.0.1
 ENV PORT=5000
 
 # Expose vsock port (will be mapped via vsock-proxy)
@@ -67,4 +69,5 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD node -e "require('http').get('http://localhost:5000', (r) => process.exit(r.statusCode === 200 ? 0 : 1))" || exit 1
 
 # Start the API server
-CMD ["/usr/local/bin/node", "/app/dist/api/server.js"]
+#CMD ["/usr/local/bin/node", "/app/dist/api/server.js"]
+CMD sh -c "socat VSOCK-LISTEN:5000,fork,reuseaddr UNIX-CONNECT:/tmp/app.sock & exec /usr/local/bin/node /app/dist/api/server.js"

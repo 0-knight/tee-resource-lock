@@ -1,14 +1,14 @@
 /**
- * TEE Resource Lock API Server with vsock support
+ * TEE Resource Lock API Server
  * 
- * This server uses raw TCP sockets (net.createServer) instead of HTTP
- * to ensure compatibility with AWS Nitro Enclave's vsock communication.
+ * HTTP server running inside the enclave that exposes CCM functionality.
+ * Uses vsock for secure communication in AWS Nitro Enclaves.
  * 
- * For development/testing outside enclave, it works as a normal TCP server.
- * Inside Nitro Enclave, vsock connections are handled via virtio-vsock.
+ * In production, this would use vsock (VM sockets) for parent-enclave communication.
+ * For development/testing, we use standard HTTP.
  */
 
-import * as net from 'net';
+import { createServer, IncomingMessage, ServerResponse } from 'http';
 import {
   Address,
   Hash,
@@ -19,6 +19,7 @@ import {
   SignLockResponse,
   FulfillLockRequest,
   FulfillLockResponse,
+  BootAttestation,
   AppAttestation,
   BalanceResponse,
   ResourceLock,
@@ -26,6 +27,7 @@ import {
 } from '../shared/types';
 
 import {
+  CredibleCommitmentMachine,
   initializeCCM,
   getCCM,
 } from '../enclave/ccm';
@@ -170,8 +172,8 @@ handlers.set('getLockedBalance', async (params: { owner: Address; asset: AssetId
   const lockedAmount = ccm.getLockedBalance(params.owner, params.asset);
   
   return {
-    total: '0',
-    available: '0',
+    total: '0', // Would need RPC to get on-chain balance
+    available: '0', // total - locked
     locked: lockedAmount.toString(),
     locks: locks,
   };
@@ -303,123 +305,79 @@ async function processRequest(request: APIRequest): Promise<APIResponse> {
 }
 
 // ============================================================================
-// TCP Socket Connection Handler (vsock compatible)
+// HTTP Server
 // ============================================================================
 
-function handleConnection(socket: net.Socket): void {
-  console.log('[API] New connection');
-  let buffer = '';
-
-  socket.on('data', async (chunk) => {
-    buffer += chunk.toString();
-    
-    // Try to extract JSON from the buffer
-    let jsonStr = buffer.trim();
-    
-    // Check if it's an HTTP request (from curl or socat proxy)
-    if (buffer.startsWith('POST') || buffer.startsWith('GET') || buffer.startsWith('OPTIONS')) {
-      // Handle CORS preflight
-      if (buffer.startsWith('OPTIONS')) {
-        socket.write('HTTP/1.1 204 No Content\r\n');
-        socket.write('Access-Control-Allow-Origin: *\r\n');
-        socket.write('Access-Control-Allow-Methods: POST, OPTIONS\r\n');
-        socket.write('Access-Control-Allow-Headers: Content-Type\r\n');
-        socket.write('\r\n');
-        socket.end();
-        buffer = '';
-        return;
-      }
-      
-      // Find the body after headers
-      const bodyMatch = buffer.match(/\r\n\r\n([\s\S]*)/);
-      if (!bodyMatch) {
-        return; // Wait for more data (headers not complete)
-      }
-      
-      // Check Content-Length
-      const contentLengthMatch = buffer.match(/Content-Length:\s*(\d+)/i);
-      if (contentLengthMatch) {
-        const contentLength = parseInt(contentLengthMatch[1], 10);
-        const body = bodyMatch[1];
-        if (body.length < contentLength) {
-          return; // Wait for more data
-        }
-        jsonStr = body.substring(0, contentLength);
-      } else {
-        jsonStr = bodyMatch[1].trim();
-      }
-    }
-    
-    if (!jsonStr) return;
-    
-    try {
-      const request = JSON.parse(jsonStr);
-      
-      // Validate JSON-RPC request
-      if (request.jsonrpc !== '2.0' || !request.method) {
-        const errResponse = JSON.stringify({
-          jsonrpc: '2.0',
-          id: request.id || null,
-          error: createError(ERROR_CODES.INVALID_REQUEST, 'Invalid JSON-RPC request'),
-        });
-        sendHttpResponse(socket, 400, errResponse);
-        buffer = '';
-        return;
-      }
-      
-      const response = await processRequest(request);
-      const responseStr = JSON.stringify(response, (_, value) =>
-        typeof value === 'bigint' ? value.toString() : value
-      );
-      
-      sendHttpResponse(socket, 200, responseStr);
-      buffer = '';
-      
-    } catch (e) {
-      // Check if we might be waiting for more data
-      if (!buffer.includes('}')) {
-        return; // Wait for more data
-      }
-      
-      // Malformed JSON
-      const errResponse = JSON.stringify({
-        jsonrpc: '2.0',
-        id: null,
-        error: createError(ERROR_CODES.PARSE_ERROR, 'Invalid JSON'),
-      });
-      sendHttpResponse(socket, 400, errResponse);
-      buffer = '';
-    }
-  });
-
-  socket.on('error', (err) => {
-    console.error('[API] Socket error:', err.message);
-  });
-
-  socket.on('close', () => {
-    console.log('[API] Connection closed');
-  });
-}
-
-function sendHttpResponse(socket: net.Socket, statusCode: number, body: string): void {
-  const statusText = statusCode === 200 ? 'OK' : 'Bad Request';
-  socket.write(`HTTP/1.1 ${statusCode} ${statusText}\r\n`);
-  socket.write('Content-Type: application/json\r\n');
-  socket.write('Access-Control-Allow-Origin: *\r\n');
-  socket.write('Access-Control-Allow-Methods: POST, OPTIONS\r\n');
-  socket.write('Access-Control-Allow-Headers: Content-Type\r\n');
-  socket.write(`Content-Length: ${Buffer.byteLength(body)}\r\n`);
-  socket.write('Connection: close\r\n');
-  socket.write('\r\n');
-  socket.write(body);
-  socket.end();
+async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  // CORS headers
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  
+  // Handle preflight
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+  
+  // Only accept POST
+  if (req.method !== 'POST') {
+    res.writeHead(405, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      jsonrpc: '2.0',
+      id: null,
+      error: createError(ERROR_CODES.INVALID_REQUEST, 'Only POST method is accepted'),
+    }));
+    return;
+  }
+  
+  // Parse body
+  let body = '';
+  for await (const chunk of req) {
+    body += chunk;
+  }
+  
+  let request: APIRequest;
+  try {
+    request = JSON.parse(body);
+  } catch {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      jsonrpc: '2.0',
+      id: null,
+      error: createError(ERROR_CODES.PARSE_ERROR, 'Invalid JSON'),
+    }));
+    return;
+  }
+  
+  // Validate JSON-RPC request
+  if (request.jsonrpc !== '2.0' || !request.method) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      jsonrpc: '2.0',
+      id: request.id || null,
+      error: createError(ERROR_CODES.INVALID_REQUEST, 'Invalid JSON-RPC request'),
+    }));
+    return;
+  }
+  
+  // Process request
+  const response = await processRequest(request);
+  
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(response, (_, value) =>
+    typeof value === 'bigint' ? value.toString() : value
+  ));
 }
 
 // ============================================================================
 // Server Startup
 // ============================================================================
 
+//const PORT = parseInt(process.env.PORT || '8080', 10);
 const PORT = parseInt(process.env.PORT || '5000', 10);
+//const HOST = process.env.HOST || '127.0.0.1';
 const HOST = process.env.HOST || '0.0.0.0';
 
 export function startServer(): void {
@@ -427,17 +385,11 @@ export function startServer(): void {
   console.log('[API] Initializing Credible Commitment Machine...');
   initializeCCM();
   
-  // Create TCP server (compatible with both TCP and vsock via virtio)
-  const server = net.createServer(handleConnection);
+  // Create HTTP server
+  const server = createServer(handleRequest);
   
-  server.on('error', (err) => {
-    console.error('[API] Server error:', err);
-  });
-
-  //server.listen(PORT, HOST, () => {
-  server.listen("/tmp/app.sock", () => {
-    //console.log(`[API] TEE Resource Lock API server running on ${HOST}:${PORT}`);
-    console.log(`[API] TEE Resource Lock API server running on /tmp/app.sock`);
+  server.listen(PORT, HOST, () => {
+    console.log(`[API] TEE Resource Lock API server running on ${HOST}:${PORT}`);
     console.log('[API] Available methods:');
     for (const method of handlers.keys()) {
       console.log(`  - ${method}`);
