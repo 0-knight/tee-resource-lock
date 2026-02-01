@@ -135,6 +135,7 @@ export class CredibleCommitmentMachine {
    * Generate boot attestation for verification
    * In production, this includes AWS Nitro attestation document
    */
+/*
   generateBootAttestation(): BootAttestation {
     const attestationData = abiEncode(
       ['bytes32', 'address', 'uint256'],
@@ -156,6 +157,38 @@ export class CredibleCommitmentMachine {
       bootTime: this.state.bootTime,
       codeHash: keccak256('enclave-binary-v1.0.0'), // Would be actual binary hash
       awsAttestationDocument: mockAwsAttestation,
+      signature,
+    };
+  }
+*/
+  generateBootAttestation(): BootAttestation {
+    const timestamp = this.state.bootTime;
+
+    // Ensure enclaveId is properly padded 64 hex chars (32 bytes)
+    const enclaveId = this.state.enclaveId.startsWith('0x')
+      ? this.state.enclaveId
+      : '0x' + this.state.enclaveId;
+
+    // Create attestation document as JSON (simplified for now)
+    const attestationDoc = JSON.stringify({
+      enclaveId: enclaveId,
+      publicKey: this.state.publicKey,
+      bootTime: timestamp,
+      pcr0: 'mock-pcr0-for-development',
+      pcr1: 'mock-pcr1-for-development',
+      pcr2: 'mock-pcr2-for-development',
+    });
+
+    // Hash and sign
+    const docHash = keccak256(Buffer.from(attestationDoc).toString('hex'));
+    const signature = signHash(docHash, this.state.privateKey);
+
+    return {
+      enclaveId: enclaveId as Hash,
+      publicKey: this.state.publicKey,
+      bootTime: timestamp,
+      codeHash: keccak256(Buffer.from('enclave-binary-v1.0.0').toString('hex')),
+      awsAttestationDocument: ('0x' + Buffer.from(attestationDoc).toString('hex')) as Bytes,
       signature,
     };
   }
