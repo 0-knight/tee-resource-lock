@@ -55,6 +55,8 @@ import {
   abiEncode,
 } from '../shared/crypto';
 
+import { getAttestationDocument, getSecureRandom, isNsmAvailable } from './nsm';
+
 // ============================================================================
 // Enclave Configuration
 // ============================================================================
@@ -161,6 +163,7 @@ export class CredibleCommitmentMachine {
     };
   }
 */
+/*
   generateBootAttestation(): BootAttestation {
     const timestamp = this.state.bootTime;
 
@@ -189,6 +192,54 @@ export class CredibleCommitmentMachine {
       bootTime: timestamp,
       codeHash: keccak256(Buffer.from('enclave-binary-v1.0.0').toString('hex')),
       awsAttestationDocument: ('0x' + Buffer.from(attestationDoc).toString('hex')) as Bytes,
+      signature,
+    };
+  }
+ */
+  /**
+   * Generate boot attestation with real NSM document
+   */
+  async generateBootAttestation(): Promise<BootAttestation> {
+    const timestamp = this.state.bootTime;
+
+    console.log('[CCM] Generating boot attestation...');
+    console.log('[CCM] NSM available:', isNsmAvailable());
+
+    // NSM에서 실제 attestation document 요청
+    const attestation = await getAttestationDocument({
+      publicKey: Buffer.from(this.state.publicKey.slice(2), 'hex'),
+      userData: Buffer.from(JSON.stringify({
+        enclaveId: this.state.enclaveId,
+        bootTime: timestamp,
+        version: '1.0.0',
+      })),
+      nonce: Buffer.from(Date.now().toString()),
+    });
+
+    if (!attestation.success) {
+      console.warn('[CCM] NSM attestation failed:', attestation.error);
+    } else if (attestation.mock) {
+      console.warn('[CCM] Using mock attestation (not in real Enclave)');
+    } else {
+      console.log('[CCM] Real NSM attestation generated!');
+    }
+
+    // PCR0를 codeHash로 사용
+    const codeHash = attestation.pcrs['0']
+      ? ('0x' + attestation.pcrs['0'].padStart(64, '0').slice(0, 64)) as Hash
+      : keccak256(Buffer.from('mock-enclave-v1').toString('hex'));
+
+    // Attestation document 서명
+    const docBuffer = Buffer.from(attestation.document, 'base64');
+    const docHash = keccak256(docBuffer.toString('hex'));
+    const signature = signHash(docHash, this.state.privateKey);
+
+    return {
+      enclaveId: this.state.enclaveId,
+      publicKey: this.state.publicKey,
+      bootTime: timestamp,
+      codeHash,
+      awsAttestationDocument: ('0x' + docBuffer.toString('hex')) as Bytes,
       signature,
     };
   }

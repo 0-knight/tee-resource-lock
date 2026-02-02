@@ -36,7 +36,10 @@ WORKDIR /app
 
 # Create non-root user for security
 RUN addgroup -g 1001 -S enclave && \
-    adduser -S -D -H -u 1001 -s /sbin/nologin -G enclave enclave 
+    adduser -S -D -H -u 1001 -s /sbin/nologin -G enclave enclave && \
+    apk add --no-cache python3 py3-pip socat && \
+    pip3 install --break-system-packages boto3 cbor2 || true &&\
+    pip3 install --break-system-packages aws-nsm-interface || true
 
 # Copy package files
 COPY package*.json ./
@@ -49,6 +52,10 @@ RUN apk add --no-cache socat && \
 
 # Copy built files from builder stage
 COPY --from=builder /app/dist ./dist
+
+# Copy NSM scripts
+COPY scripts/nsm/ ./scripts/nsm/
+RUN chmod +x ./scripts/nsm/*.py
 
 # Set ownership
 RUN chown -R enclave:enclave /app

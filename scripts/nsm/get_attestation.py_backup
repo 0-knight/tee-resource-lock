@@ -1,0 +1,208 @@
+#!/usr/bin/env python3
+"""
+NSM Attestation Document Generator
+
+이 스크립트는 AWS Nitro Enclave 내부에서 실행되어
+실제 NSM으로부터 attestation document를 가져옵니다.
+
+Usage:
+    python3 get_attestation.py [--public-key <base64>] [--user-data <string>] [--nonce <base64>]
+
+Output:
+    JSON 형식의 attestation document (stdout)
+"""
+
+import sys
+import json
+import base64
+import argparse
+
+"""
+def get_attestation(public_key=None, user_data=None, nonce=None):
+    # NSM에서 attestation document 가져오기
+    try:
+        # AWS NSM 라이브러리 import (Enclave 내부에서만 동작)
+        import aws_nsm_interface as nsm
+        
+        # NSM 파일 디스크립터 열기
+        fd = nsm.open_nsm()
+        
+        # Attestation 요청 생성
+        request = {}
+        
+        if public_key:
+            request['public_key'] = base64.b64decode(public_key)
+        
+        if user_data:
+            request['user_data'] = user_data.encode('utf-8') if isinstance(user_data, str) else user_data
+        
+        if nonce:
+            request['nonce'] = base64.b64decode(nonce)
+        
+        # Attestation document 요청
+        attestation = nsm.get_attestation_doc(fd, **request)
+        
+        # 결과 파싱
+        result = {
+            'success': True,
+            'document': base64.b64encode(attestation['document']).decode('utf-8'),
+            'pcrs': {},
+        }
+        
+        # PCR 값 추출
+        for pcr_index, pcr_value in attestation.get('pcrs', {}).items():
+            result['pcrs'][str(pcr_index)] = pcr_value.hex() if isinstance(pcr_value, bytes) else pcr_value
+        
+        nsm.close_nsm(fd)
+        
+        return result
+        
+    except ImportError:
+        # NSM 라이브러리가 없는 경우 (Enclave 외부)
+        return {
+            'success': False,
+            'error': 'NSM library not available - not running in Nitro Enclave',
+            'mock': True,
+            'document': base64.b64encode(json.dumps({
+                'module_id': 'mock-module',
+                'timestamp': 0,
+                'pcrs': {'0': 'mock', '1': 'mock', '2': 'mock'},
+            }).encode()).decode('utf-8'),
+            'pcrs': {
+                '0': 'mock-pcr0-not-in-enclave',
+                '1': 'mock-pcr1-not-in-enclave',
+                '2': 'mock-pcr2-not-in-enclave',
+            }
+        }
+    except Exception as e:
+        return {
+            'success': False,
+            'error': str(e),
+        }
+"""
+def get_attestation(public_key=None, user_data=None, nonce=None):
+    # NSM에서 attestation document 가져오기
+    try:
+        import aws_nsm_interface
+        
+        # 요청 파라미터 구성
+        request = {}
+        if public_key:
+            request['public_key'] = base64.b64decode(public_key)
+        if user_data:
+            request['user_data'] = user_data.encode('utf-8') if isinstance(user_data, str) else user_data
+        if nonce:
+            request['nonce'] = base64.b64decode(nonce)
+        
+        # get_attestation_doc 직접 호출 (fd 불필요)
+        attestation_doc = aws_nsm_interface.get_attestation_doc(**request)
+        
+        return {
+            'success': True,
+            'document': base64.b64encode(attestation_doc).decode('utf-8'),
+            'pcrs': {},  # 실제 PCR은 document 내부에 CBOR로 인코딩됨
+        }
+        
+    except ImportError as e:
+        # NSM 라이브러리가 없는 경우 (Enclave 외부)
+        return {
+            'success': False,
+            'error': f'NSM library not available: {str(e)}',
+            'mock': True,
+            'document': base64.b64encode(json.dumps({
+                'module_id': 'mock-module',
+                'timestamp': 0,
+                'pcrs': {'0': 'mock', '1': 'mock', '2': 'mock'},
+            }).encode()).decode('utf-8'),
+            'pcrs': {
+                '0': 'mock-pcr0-not-in-enclave',
+                '1': 'mock-pcr1-not-in-enclave',
+                '2': 'mock-pcr2-not-in-enclave',
+            }
+        }
+    except Exception as e:
+        return {
+            'success': False,
+            'error': str(e),
+        }
+
+def get_random(length=32):
+    """NSM에서 secure random 가져오기"""
+    try:
+        import aws_nsm_interface as nsm
+        
+        fd = nsm.open_nsm()
+        random_bytes = nsm.get_random(fd, length)
+        nsm.close_nsm(fd)
+        
+        return {
+            'success': True,
+            'random': base64.b64encode(random_bytes).decode('utf-8'),
+            'length': length,
+        }
+        
+    except ImportError:
+        import os
+        return {
+            'success': True,
+            'random': base64.b64encode(os.urandom(length)).decode('utf-8'),
+            'length': length,
+            'mock': True,
+        }
+    except Exception as e:
+        return {
+            'success': False,
+            'error': str(e),
+        }
+
+def describe_nsm():
+    """NSM 정보 조회"""
+    try:
+        import aws_nsm_interface as nsm
+        
+        fd = nsm.open_nsm()
+        info = nsm.describe_nsm(fd)
+        nsm.close_nsm(fd)
+        
+        return {
+            'success': True,
+            'info': info,
+        }
+        
+    except ImportError:
+        return {
+            'success': False,
+            'error': 'NSM library not available',
+            'mock': True,
+        }
+    except Exception as e:
+        return {
+            'success': False,
+            'error': str(e),
+        }
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='NSM Attestation Tool')
+    parser.add_argument('--command', choices=['attestation', 'random', 'describe'], 
+                        default='attestation', help='Command to execute')
+    parser.add_argument('--public-key', help='Public key (base64)')
+    parser.add_argument('--user-data', help='User data string')
+    parser.add_argument('--nonce', help='Nonce (base64)')
+    parser.add_argument('--length', type=int, default=32, help='Random bytes length')
+    
+    args = parser.parse_args()
+    
+    if args.command == 'attestation':
+        result = get_attestation(
+            public_key=args.public_key,
+            user_data=args.user_data,
+            nonce=args.nonce
+        )
+    elif args.command == 'random':
+        result = get_random(args.length)
+    elif args.command == 'describe':
+        result = describe_nsm()
+    else:
+        result = {'error': 'Unknown command'}
+    
+    print(json.dumps(result, indent=2))

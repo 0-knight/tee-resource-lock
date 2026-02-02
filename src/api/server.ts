@@ -96,7 +96,8 @@ handlers.set('health', async () => {
 // Get boot attestation
 handlers.set('getBootAttestation', async () => {
   const ccm = getCCM();
-  return ccm.generateBootAttestation();
+  //return ccm.generateBootAttestation();
+  return await ccm.generateBootAttestation();
 });
 
 // Create a new lock

@@ -1,0 +1,107 @@
+{
+  "EifVersion": 4,
+  "Measurements": {
+    "HashAlgorithm": "Sha384 { ... }",
+    "PCR0": "e2505e12655e556327b5e1e6110ec9e3ef50f169a0a0d276f117f83422433b1158f28a32316be638aa7f0f4ae2b7f265",
+    "PCR1": "4b4d5b3661b3efc12920900c80e126e4ce783c522de6c02a2a5bf7af3a2b9327b86776f188e4be1c1c404a129dbda493",
+    "PCR2": "ceec9726bf090155e3a673cb0a7fb09764b602215aea7dadea1a7b05b7b710c98569393d90ad03832a4246ce9f680941"
+  },
+  "IsSigned": false,
+  "CheckCRC": true,
+  "ImageName": "tee-resource-lock",
+  "ImageVersion": "3786de6bb002f876bf176aadfdd92b036c59426007a01f9c97eb0e7a83c78e60",
+  "Metadata": {
+    "BuildTime": "2026-02-02T03:07:32.331538282+00:00",
+    "BuildTool": "nitro-cli",
+    "BuildToolVersion": "1.4.4",
+    "OperatingSystem": "Linux",
+    "KernelVersion": "4.14.256",
+    "DockerInfo": {
+      "Architecture": "amd64",
+      "Author": "",
+      "Comment": "buildkit.dockerfile.v0",
+      "Config": {
+        "ArgsEscaped": true,
+        "AttachStderr": false,
+        "AttachStdin": false,
+        "AttachStdout": false,
+        "Cmd": [
+          "/bin/sh",
+          "-c",
+          "sh -c \"socat VSOCK-LISTEN:5000,fork,reuseaddr UNIX-CONNECT:/tmp/app.sock & exec /usr/local/bin/node /app/dist/api/server.js\""
+        ],
+        "Domainname": "",
+        "Entrypoint": [
+          "docker-entrypoint.sh"
+        ],
+        "Env": [
+          "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+          "NODE_VERSION=20.20.0",
+          "YARN_VERSION=1.22.22",
+          "NODE_ENV=production",
+          "HOST=127.0.0.1",
+          "PORT=5000"
+        ],
+        "ExposedPorts": {
+          "5000/tcp": {}
+        },
+        "Healthcheck": {
+          "Interval": 30000000000,
+          "Retries": 3,
+          "StartPeriod": 5000000000,
+          "Test": [
+            "CMD-SHELL",
+            "node -e \"require('http').get('http://localhost:5000', (r) => process.exit(r.statusCode === 200 ? 0 : 1))\" || exit 1"
+          ],
+          "Timeout": 3000000000
+        },
+        "Hostname": "",
+        "Image": "",
+        "OpenStdin": false,
+        "StdinOnce": false,
+        "Tty": false,
+        "User": "enclave",
+        "WorkingDir": "/app"
+      },
+      "Created": "2026-02-02T03:02:28.4334333Z",
+      "DockerVersion": "",
+      "GraphDriver": {
+        "Data": {
+          "LowerDir": "/var/lib/docker/overlay2/aoirv0qs842qahds1bbipeur2/diff:/var/lib/docker/overlay2/puthmp2zho2vfmabepy6nntst/diff:/var/lib/docker/overlay2/mq8u2hj0h8nvsrsdyhezdw04o/diff:/var/lib/docker/overlay2/jjglcpi2i4alv9azdfacj6n3t/diff:/var/lib/docker/overlay2/qkdtgdr2w9zrbeecsctqty82n/diff:/var/lib/docker/overlay2/vj12aw8klzh0q24phx08e3xv0/diff:/var/lib/docker/overlay2/0ksri7zuing4tda714atcb18h/diff:/var/lib/docker/overlay2/14205e76be8c14099a3f17725ed2a663aeb4bc898dd5fe00ab34d033d8dd7c3d/diff:/var/lib/docker/overlay2/562c7b4560fc52ca96ff22b1edc96e25bb5bc0acc027f72b4e7e4cd7792f9db7/diff:/var/lib/docker/overlay2/230b5c29df170f5d5e6fa0556582a33540ff5e413fce730d2ebbabb5408c5a73/diff:/var/lib/docker/overlay2/75dfb4bb4746b37fa51582aa1b1cab92c6a4d1ec3f1a61407292dc73165b7eb2/diff",
+          "MergedDir": "/var/lib/docker/overlay2/qzmlkmbln1gz5xgwj82ggr8jy/merged",
+          "UpperDir": "/var/lib/docker/overlay2/qzmlkmbln1gz5xgwj82ggr8jy/diff",
+          "WorkDir": "/var/lib/docker/overlay2/qzmlkmbln1gz5xgwj82ggr8jy/work"
+        },
+        "Name": "overlay2"
+      },
+      "Id": "sha256:3786de6bb002f876bf176aadfdd92b036c59426007a01f9c97eb0e7a83c78e60",
+      "Metadata": {
+        "LastTagTime": "2026-02-02T03:02:29.716508147Z"
+      },
+      "Os": "linux",
+      "Parent": "",
+      "RepoDigests": [],
+      "RepoTags": [
+        "tee-resource-lock:latest"
+      ],
+      "RootFS": {
+        "Layers": [
+          "sha256:989e799e634906e94dc9a5ee2ee26fc92ad260522990f26e707861a5f52bf64e",
+          "sha256:e881f55858a89b3203dd5258c5c69767ea8d99ae85cf8856f81593d298db8771",
+          "sha256:3bcb0b085764b43c9091f1020349b49111f50794d82506f512c8db336453e36b",
+          "sha256:1dcaf7a5a25b4c69bc1719be72a65c714d3c5ba36ce66f88733559808bcba801",
+          "sha256:1dc0af6e18c52f5f83695fc251e895f2acdb9023f97821fe762476776b78946c",
+          "sha256:88caf4cda664e9a69a5f35e1d3bd8b47f237ee531f165e6d791003543b6d92f7",
+          "sha256:c6d604fbf8d77a88876c57356babd34e5728dc98737582f989c663fdc7814048",
+          "sha256:448dbe663fd3e3cbd886b6b6ef224a36d383d0e9de9a54e89576ffdd7cc4a910",
+          "sha256:1a27c2f16f61ddf5271e0b966d217f8004117c22c5d250d8c48cf2906b038067",
+          "sha256:15217082e667f135edb6aac240535603e285056ecd18af30bd3ebad1488dcb13",
+          "sha256:a5490250f5400667d6f0ffc0cceacfe50d16cd67df1ae591e85f8b0fbac159ea",
+          "sha256:8d2f3fd0c44f6899cba6889d1b0b962aba126a3597b8c4787099f3ff8d6b5ca0"
+        ],
+        "Type": "layers"
+      },
+      "Size": 244943758
+    }
+  }
+}
